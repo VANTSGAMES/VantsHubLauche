@@ -9,7 +9,8 @@ Dos colas en Neon (migracion 25) que convierten la memoria del agente en DMs:
 
 Asi, si el bot de Discord esta vivo, el dueno ve TODO el agente sin tocar
 nada; si Discord no funciona, la evidencia queda en Neon igualmente y el
-workflow agente.yml publica el resumen en GitHub.
+ciclo del cuartel (VANTSNET/flask-Agents, workflow agente.yml) publica el
+resumen en GitHub.
 
 Mismo patron que supervisor.py (reintentos, holgura anti rate-limit).
 """

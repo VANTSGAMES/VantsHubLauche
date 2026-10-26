@@ -1,8 +1,9 @@
 """Comandos /agente — el mando del dueno sobre el Agente VANTS.
 
-El agente vive en services/agent-service y se ejecuta:
-  a) cada 30 min en CI (workflow agente.yml), guardando su memoria en Neon
-     (agent_runs / agent_events / agent_comandos, migracion 25);
+El agente vive en el cuartel VANTSNET/flask-Agents (services/agent-service)
+y se ejecuta:
+  a) cada 30 min en CI desde el cuartel (workflow agente.yml), guardando su
+     memoria en Neon (agent_runs / agent_events / agent_comandos, migracion 25);
   b) opcionalmente como servicio HTTP (AGENT_URL + AGENT_TOKEN), con respuesta
      instantanea.
 
@@ -64,7 +65,7 @@ def _embed_estado(run: dict | None, incidentes: list[dict]) -> discord.Embed:
         if run.get("error"):
             e.add_field(name="Error", value=str(run["error"])[:200], inline=False)
     else:
-        e.description = "El agente aún no ha corrido (espera al ciclo de CI o lanza `agente.yml`)."
+        e.description = "El agente aún no ha corrido (espera al ciclo del cuartel flask-Agents)."
     if incidentes:
         lineas = []
         for inc in incidentes:
@@ -138,7 +139,7 @@ def registrar(tree: discord.app_commands.CommandTree, guild: discord.Object) -> 
         incidentes = await _incidentes(15)
         if not run:
             await interaction.followup.send(
-                "El agente aún no ha corrido. Lanza el workflow `agente.yml` o espera el ciclo.",
+                "El agente aún no ha corrido. El ciclo corre desde el cuartel flask-Agents.",
                 ephemeral=True,
             )
             return
