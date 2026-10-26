@@ -1,5 +1,9 @@
 name: "Neon · migraciones de la base real"
 
+# DEPRECATED (migración Neon -> Supabase): las migraciones oficiales viven en
+# VANTSNET/VantsBasededatos (fuente de verdad). Este duplicado se apaga tras el
+# corte; mientras dure el paralelo sigue aplicando en Neon.
+
 # Aplica las migraciones SQL idempotentes de db/migrations/ contra la rama
 # br-sweet-shape-b42xhogj del proyecto Neon square-surf-41242074 (base neondb).
 #

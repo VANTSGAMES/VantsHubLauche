@@ -1,8 +1,12 @@
 name: "FACEIT · procesador de partidas (XP + rango)"
 
 # Convierte los eventos que el worker de FACEIT guarda en faceit_webhook_events
-# en XP + movimiento de rango en Neon (faceit_procesar_eventos, migración 10).
+# en XP + movimiento de rango en la base (faceit_procesar_eventos, migración 10).
 # Corre cada 10 minutos y también a mano (Run workflow).
+#
+# Migración Neon -> Supabase: la cadena ya no se resuelve con la API de Neon
+# (NEON_API_KEY); se usa el secreto DATABASE_URL directamente. Su VALOR decide
+# la base: cadena de Neon durante el paralelo, de Supabase tras el corte.
 
 on:
   schedule:
@@ -24,7 +28,7 @@ jobs:
     # 144 runs/día: sin esto, una corrida colgada encola en cascada hasta 6 h
     timeout-minutes: 5
     env:
-      NK: ${{ secrets.NEON_API_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       # El contexto `secrets` NO está disponible en los `if` de los pasos:
       # GitHub rechaza el workflow completo ("Unrecognized named-value").
       # Se mapean a env del job para poder usarlos en la condición del paso.
@@ -34,41 +38,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Comprobar acceso a Neon
+      - name: Comprobar acceso a la base
         run: |
-          if [ -z "$NK" ]; then
-            echo "::error::Falta el secreto NEON_API_KEY (Settings → Secrets and variables → Actions)."
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Falta el secreto DATABASE_URL (Settings → Secrets and variables → Actions). Desde la migración a Supabase sustituye a NEON_API_KEY."
             exit 1
           fi
 
       - name: Corte de conexión psql (anti-cuelgue)
         run: echo "PGCONNECT_TIMEOUT=10" >> "$GITHUB_ENV"
 
-      - name: Install Neon CLI
-        run: npm install -g neon@latest
-
-      - name: Resolver cadena de conexión (Neon CLI)
-        run: |
-          CS=$(neon connection-string br-sweet-shape-b42xhogj \
-            --project-id square-surf-41242074 \
-            --database neondb --api-key "$NK" 2>/tmp/cs_err || true)
-          if [ -z "$CS" ]; then
-            CS=$(neon cs br-sweet-shape-b42xhogj \
-              --project-id square-surf-41242074 \
-              --database neondb --api-key "$NK" 2>/dev/null || true)
-          fi
-          if [ -z "$CS" ]; then
-            echo "::error::Neon CLI no devolvió cadena de conexión"
-            cat /tmp/cs_err 2>/dev/null || true
-            exit 1
-          fi
-          echo "::add-mask::$CS"
-          echo "NEON_CS=$CS" >> "$GITHUB_ENV"
-          echo "✅ Cadena resuelta"
-
       - name: Procesar partidas FACEIT pendientes
         run: |
-          PGCONNECT_TIMEOUT=10 psql --connect-timeout=10 "$NEON_CS" -v ON_ERROR_STOP=1 -At -c "SELECT faceit_procesar_eventos();"
+          # psql NO tiene la opción CLI --connect-timeout: el corte de conexión
+          # lo hace la variable de libpq PGCONNECT_TIMEOUT (ya exportada arriba).
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "SELECT faceit_procesar_eventos();"
 
       # Respaldo del webhook: sondea la Data API v4 y registra partidas que
       # el webhook no alcanzó a entregar (idempotente por faceit_match_id).

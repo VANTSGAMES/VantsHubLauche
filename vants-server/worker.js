@@ -185,7 +185,9 @@ function urlTorneos(lang, juego, estado) {
 // Proxy público de lectura (vantsdata · Neon Function): whitelist de tablas,
 // strip de columnas sensibles, rate limit y Content-Range con _count=exact.
 // El Worker NUNCA guarda credenciales de la base (patrón de la casa).
-const PLAT_PROXY = 'https://br-sweet-shape-b42xhogj-vantsdata.compute.c-6.us-east-2.aws.neon.tech/';
+// let (no const): la entrada del fetch lo reasigna desde env.PLAT_PROXY
+// al cortar hacia el Worker vants-functions. Fallback: endpoint de Neon.
+let PLAT_PROXY = 'https://br-sweet-shape-b42xhogj-vantsdata.compute.c-6.us-east-2.aws.neon.tech/';
 
 async function proxyConsulta(tabla, params, conCount) {
   const u = new URL(PLAT_PROXY);
@@ -383,7 +385,12 @@ async function paginaTorneos(env, request, url, lang, juego, estado) {
 const AUTH0_TENANT = 'vants.eu.auth0.com';
 // Neon Data API (PostgREST): el Worker NUNCA guarda credenciales de la base;
 // reenvía el JWT del usuario y las RLS/policies de cada tabla deciden.
-const NEON_API = 'https://ep-autumn-scene-b4opu2ip.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1';
+// let (no const): la entrada del fetch lo reasigna desde env.SUPABASE_REST_URL
+// al cortar hacia la Data API de Supabase (PostgREST nativo, mismas
+// consultas: filtros eq., rpc y vistas). Fallback: endpoint de Neon.
+let NEON_API = 'https://ep-autumn-scene-b4opu2ip.apirest.c-6.us-east-2.aws.neon.tech/neondb/rest/v1';
+// Clave anon de Supabase (cabecera apikey obligatoria en su REST).
+let SUPA_ANON = '';
 
 // Valida el JWT de la sesión contra Auth0 /userinfo → { sub, email } | null
 async function infoDeSesion(token) {
@@ -402,11 +409,25 @@ async function infoDeSesion(token) {
 // (las vistas públicas tienen GRANT a PUBLIC).
 async function neonGet(rutaRelativa, token) {
   const headers = { Accept: 'application/json' };
+  if (SUPA_ANON) headers.apikey = SUPA_ANON;
   if (token) headers[AUTH_HEADER] = 'Bearer ' + token;
+  else if (SUPA_ANON) headers[AUTH_HEADER] = 'Bearer ' + SUPA_ANON;
   const r = await fetch(NEON_API + rutaRelativa, { headers });
   if (!r.ok) return { ok: false, status: r.status, body: [] };
   const arr = await r.json().catch(() => []);
   return { ok: true, status: r.status, body: Array.isArray(arr) ? arr : [] };
+}
+
+/* Cabeceras REST de la base para los fetch directos (PostgREST de Neon
+ * o de Supabase, mismas reglas): apikey de Supabase cuando este
+ * configurada, y Bearer del usuario (JWT Auth0) que las RLS resuelven
+ * igual en ambas (request.jwt.claims). */
+function hRestDb(token, extra) {
+  const h = Object.assign({ Accept: 'application/json' }, extra || {});
+  if (SUPA_ANON) h.apikey = SUPA_ANON;
+  if (token) h[AUTH_HEADER] = 'Bearer ' + token;
+  else if (SUPA_ANON) h[AUTH_HEADER] = 'Bearer ' + SUPA_ANON;
+  return h;
 }
 
 function rateLimit(bucket, ip, max) {
@@ -1431,7 +1452,7 @@ async function fetchWorker(request, env, ctx) {
       try {
         ins = await fetch(NEON_API + '/tournament_teams', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', [AUTH_HEADER]: 'Bearer ' + token, Prefer: 'return=representation' },
+          headers: hRestDb(token, { 'Content-Type': 'application/json', Prefer: 'return=representation' }),
           body: JSON.stringify(fila),
         });
       } catch (e) {
@@ -1480,7 +1501,7 @@ async function fetchWorker(request, env, ctx) {
       }
       const body = await request.json().catch(() => ({}));
       const accion = String((body && body.accion) || '');
-      const hAuth = { 'Content-Type': 'application/json', [AUTH_HEADER]: 'Bearer ' + token, Prefer: 'return=representation' };
+      const hAuth = hRestDb(token, { 'Content-Type': 'application/json', Prefer: 'return=representation' });
       try {
         if (accion === 'equipo') {
           const id = String(body.id || '');
@@ -1519,7 +1540,7 @@ async function fetchWorker(request, env, ctx) {
         if (accion === 'reset_bracket') {
           const torneo = String(body.torneo || '').trim().slice(0, 40);
           if (!torneo || !/^[a-z0-9_-]{1,40}$/i.test(torneo)) return json({ ok: false, error: 'torneo_invalido' }, 400, ACAO);
-          const r = await fetch(NEON_API + '/tournament_matches?tournament_id=eq.' + encodeURIComponent(torneo), { method: 'DELETE', headers: { [AUTH_HEADER]: 'Bearer ' + token } });
+          const r = await fetch(NEON_API + '/tournament_matches?tournament_id=eq.' + encodeURIComponent(torneo), { method: 'DELETE', headers: hRestDb(token) });
           if (!r.ok) return json({ ok: false, error: 'base_rechazo' }, 502, ACAO);
           return json({ ok: true, accion }, 200, ACAO);
         }
@@ -2134,6 +2155,13 @@ async function fetchWorker(request, env, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
+    /* Config de la migracion Neon -> Supabase (todo opcional). Sin
+     * estas variables el Worker sigue leyendo de Neon como hasta hoy;
+     * al ponerlas, el REST de la base y el proxy van a Supabase / al
+     * Worker vants-functions. */
+    if (env && env.PLAT_PROXY) PLAT_PROXY = String(env.PLAT_PROXY).replace(/\/+$/, '') + '/';
+    if (env && env.SUPABASE_REST_URL) NEON_API = String(env.SUPABASE_REST_URL).replace(/\/+$/, '');
+    if (env && env.SUPABASE_ANON_KEY) SUPA_ANON = String(env.SUPABASE_ANON_KEY);
     try {
       return await fetchWorker(request, env, ctx);
     } catch (error) {

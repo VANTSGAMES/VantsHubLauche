@@ -1,5 +1,9 @@
 name: "Bootstrap · copiar NEON_API_KEY a la org"
 
+# DEPRECATED (migración Neon -> Supabase): tras el corte no hay NEON_API_KEY que
+# repartir; los consumidores usan el secreto DATABASE_URL directamente. Se conserva
+# solo para re-ejecutar un relay si se rotara la clave de Neon durante el paralelo.
+
 # Copia el secreto NEON_API_KEY de ESTE repo (el que ya lo tiene) hacia:
 #   1. Secreto de ORG VANTSCC (visibility=all) → todos los repos lo heredan
 #   2. Secreto de repo en VANTSCC/VantsBasedetatos (fuente de verdad de la BD)

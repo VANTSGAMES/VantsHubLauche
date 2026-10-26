@@ -1,6 +1,6 @@
 # Bot de Discord VANTS — configuración
 
-Bot en Python (`discord.py`, conexión gateway) que lee y escribe en **Neon**
+Bot en Python (`discord.py`, conexión gateway) que lee y escribe en la **base de datos** (PostgreSQL; Supabase tras la migracion desde Neon)
 (PostgreSQL). Se despliega fuera del repo estático (Railway, Render, etc.).
 
 ## 1. Portal de desarrolladores de Discord
@@ -16,7 +16,7 @@ Bot en Python (`discord.py`, conexión gateway) que lee y escribe en **Neon**
 | --- | --- |
 | `DISCORD_TOKEN` | Token del bot |
 | `DISCORD_GUILD_ID` | Servidor donde se registran los comandos |
-| `DATABASE_URL` | Cadena de conexión de Neon (`sslmode=require`) |
+| `DATABASE_URL` | Cadena de conexión de la base, pooler de sesión (`sslmode=require`) |
 | `PORT` | Puerto del health check (por defecto 8080) |
 
 Nunca subas el `.env` al repo. Copia `.env.example` a `.env` en local.
@@ -32,7 +32,7 @@ python main.py
 
 Al arrancar, el bot sincroniza los comandos con el servidor (`tree.sync`).
 
-## Tablas de Neon que usa el bot
+## Tablas de la base que usa el bot
 
 `players`, `leaderboard` (vista), `seasons`, `tournaments`, `tournament_entries`,
 `ranked_matches`, `events`, `user_game_accounts`, `player_discord_accounts`,

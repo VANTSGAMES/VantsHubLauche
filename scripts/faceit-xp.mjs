@@ -5,15 +5,15 @@
 // faceit_aplicar_resultado() — idempotente (UNIQUE faceit_match_id),
 // misma puerta que el webhook: XP + rating + stats de temporada.
 //
-// Variables: NEON_CS (cadena psql), FACEIT_API_KEY, FACEIT_DISCORD_WEBHOOK (opcional)
+// Variables: DATABASE_URL (cadena psql), FACEIT_API_KEY, FACEIT_DISCORD_WEBHOOK (opcional)
 // Uso: node scripts/faceit-xp.mjs
 // ============================================================
 import { execFileSync } from 'node:child_process';
 
-const CS = process.env.NEON_CS || '';
+const CS = process.env.DATABASE_URL || '';
 const KEY = process.env.FACEIT_API_KEY || '';
 const WEBHOOK = process.env.FACEIT_DISCORD_WEBHOOK || '';
-if (!CS || !KEY) { console.error('Faltan NEON_CS o FACEIT_API_KEY'); process.exit(1); }
+if (!CS || !KEY) { console.error('Faltan DATABASE_URL o FACEIT_API_KEY'); process.exit(1); }
 
 const psql = (sql) => execFileSync('psql', [CS, '-t', '-A', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', sql],
   { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });

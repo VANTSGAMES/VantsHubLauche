@@ -22,6 +22,14 @@ run_worker_first = true
 [vars]
 VANTS_BOT_URL = "https://br-sweet-shape-b42xhogj-vantsbot.compute.c-6.us-east-2.aws.neon.tech"
 
+# MIGRACIÓN Neon -> Supabase (corte controlado): al rellenar estas variables
+# y desplegar, el REST de la base y el proxy/bot pasan a la nueva infra.
+# Mientras estén comentadas, el Worker sigue leyendo de Neon (paralelo).
+# SUPABASE_REST_URL = "https://TU-REF.supabase.co/rest/v1"
+# SUPABASE_ANON_KEY = "clave anon de Supabase (Settings -> API)"
+# PLAT_PROXY = "https://vants-functions.vants.workers.dev/fn/vantsdata/"
+# VANTS_BOT_URL = "https://vants-functions.vants.workers.dev/fn/vantsbot"
+
 # DOMINIO PROPIO (vantsgg.com) — descomentar cuando la zona vantsgg.com esté
 # activa en la cuenta de Cloudflare (o añadirlo por panel: Workers & Pages ->
 # vants -> Configuración -> Dominios y rutas -> Agregar dominio personalizado):

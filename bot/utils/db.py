@@ -1,7 +1,9 @@
-"""Acceso a Neon (PostgreSQL) para el bot de VANTS.
+"""Acceso a la base de datos (PostgreSQL) para el bot de VANTS.
 
 Usa un pool asincrono de psycopg 3. Requiere la variable DATABASE_URL con la
-cadena de conexion de Neon (sslmode=require). El pool se abre en el primer uso.
+cadena de conexion (sslmode=require). Tras la migracion Neon -> Supabase la
+cadena es la del pooler de sesion de Supabase; el codigo no cambia porque
+psycopg habla PostgreSQL estandar. El pool se abre en el primer uso.
 """
 import asyncio
 import os

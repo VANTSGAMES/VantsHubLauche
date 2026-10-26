@@ -1,5 +1,9 @@
 name: "Neon · deploy de funciones (linker + vantsdata + vantsbot)"
 
+# DEPRECATED (migración Neon -> Supabase): las funciones ahora viven en el Worker
+# vants-functions del repo Vantsgames (cloudflare-deploy-functions.yml). Este
+# duplicado solo se mantiene durante el paralelo.
+
 # Despliega las Neon Functions con sus variables de entorno:
 #   · linker    — conectores OAuth de cuentas (FACEIT, Twitch, Kick...)
 #   · vantsdata — proxy público de lectura (lecturas anónimas de la web)

@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      NK: ${{ secrets.NEON_API_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       VANTS_DISCORD_WEBHOOK: ${{ secrets.VANTS_DISCORD_WEBHOOK }}
@@ -85,29 +85,13 @@ jobs:
         run: npm ci --no-audit --no-fund
         working-directory: services/agent-service
 
-      - name: Resolver cadena de conexión Neon (memoria del agente)
+      - name: Comprobar memoria del agente (DATABASE_URL)
         run: |
-          if [ -z "$NK" ]; then
-            echo "::error::Falta el secreto NEON_API_KEY (Settings → Secrets → Actions)."
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Falta el secreto DATABASE_URL (Settings → Secrets → Actions). Desde la migración a Supabase sustituye a NEON_API_KEY."
             exit 1
           fi
-          npm install -g neon@latest >/dev/null 2>&1
-          CS=$(neon connection-string br-sweet-shape-b42xhogj \
-            --project-id square-surf-41242074 \
-            --database neondb --api-key "$NK" 2>/tmp/cs_err || true)
-          if [ -z "$CS" ]; then
-            CS=$(neon cs br-sweet-shape-b42xhogj \
-              --project-id square-surf-41242074 \
-              --database neondb --api-key "$NK" 2>/dev/null || true)
-          fi
-          if [ -z "$CS" ]; then
-            echo "::error::Neon CLI no devolvió cadena de conexión."
-            cat /tmp/cs_err 2>/dev/null || true
-            exit 1
-          fi
-          echo "::add-mask::$CS"
-          echo "DATABASE_URL=$CS" >> "$GITHUB_ENV"
-          echo "✅ Memoria del agente (Neon) conectada"
+          echo "✅ Memoria del agente conectada (valor del secreto, oculto)"
 
       - name: Ejecutar el agente (ciclo / informe / comando)
         id: agente
