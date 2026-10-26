@@ -20,6 +20,7 @@ permissions:
 
 jobs:
   procesar:
+    if: github.repository == 'VANTSNET/vants-dev-launcher'
     runs-on: ubuntu-latest
     # 144 runs/día: sin esto, una corrida colgada encola en cascada hasta 6 h
     timeout-minutes: 5
