@@ -30,10 +30,10 @@ automático en **Cloudflare Workers**.
 │   ├── plataforma-core.js      ← lógica pura compartida Worker↔tests (ESM)
 │   └── public/                 ← frontend servido (espejo ×3 con raíz y public/)
 ├── neon-functions/             ← vantsdata (proxy lectura), mm, vantsbot, stripe…
-├── services/                   ← agent-service (cerebro agéntico GLM), matchmaking
+├── services/                   ← matchmaking (el agente vive en el cuartel flask-Agents)
 ├── bot/                        ← bot ORION de Discord (Python)
 ├── desktop-electron/           ← HUB/launcher Electron con auto-update
-├── scripts/                    ← tests (test_plataforma, test_agente, …), auditoría,
+├── scripts/                    ← tests (test_plataforma, test_mm, …), auditoría,
 │                                  build-webapp.mjs (sincroniza/verifica el espejo ×3),
 │                                  scraper_vlr.py (vlr.gg → vlr_matches, idempotente)
 ├── docs/                       ← TESTING.md, DEPLOYMENT.md, content-island.md, …
@@ -42,9 +42,23 @@ automático en **Cloudflare Workers**.
 ├── mcp/                        ← server MCP stdio sin dependencias (4 tools)
 ├── docker-compose.yml          ← api-gateway (Express :8080) + matchmaking (:8081)
 └── .github/workflows/          ← tests, neon-migrate, neon-deploy-functions,
-                                   cloudflare-deploy, fullstack, agente, faceit-*,
+                                   cloudflare-deploy, fullstack, faceit-*,
                                    electron, android (deploy-prod en cola; actions SHA-pinned)
 ```
+
+## Agentes: el cuartel es flask-Agents
+
+**Anuncio del ecosistema:** el cuartel de los agentes es
+[`VANTSNET/flask-Agents`](https://github.com/VANTSNET/flask-Agents). Ahí vive
+el código de todos los agentes, los viejos y los nuevos: el núcleo del Agente
+VANTS (`services/agent-service`), sus tests (83 + 60 + 30 asserts), el ciclo
+`agente.yml` cada 30 minutos, el puente de ORION, las migraciones 25 y 26 y la
+web VANTS AI (https://vants-ai.vercel.app/).
+
+Este repo quedó limpio de código de agentes: el bot VANTCALL (`bot/`) es
+**cliente** del cuartel por las colas de Neon (`agent_comandos`,
+`agent_events`, `agent_runs`), y la Neon Function `vantsbot` entrega `/agente`
+y los DMs. Detalles: `docs/AGENTE.md`.
 
 ## Requisitos previos
 
@@ -80,11 +94,11 @@ público `vantsdata` y reenvía el JWT del usuario cuando hay sesión.
 
 ```bash
 node scripts/test_plataforma.js    # 90 asserts (lógica de la plataforma + integración)
-node scripts/test_agente.js        # 61 asserts (agente)
 node scripts/test_mm_fase4.js      # 54 asserts (matchmaking)
-node scripts/test_llm_agente.js    # 30 asserts · test_sandbox_agente.js 60 · test_vantsbot.js 36 · test_mm_neon.js 16
+node scripts/test_vantsbot.js      # 36 asserts · test_mm_neon.js 16
 node scripts/audit_enlaces.js      # crawler interno (752 enlaces, 0 rotos)
-# total de asserts: 347 verdes en las 7 suites
+# total de asserts: 196 verdes en las 4 suites
+# los 173 asserts del agente (83 + 60 + 30) corren en el cuartel: VANTSNET/flask-Agents
 # webapp Astro (islas): tipos + build reproducible (bundles _astro byte-idénticos)
 cd webapp && npx astro check && npm run build && cd ..
 # Docker: api-gateway (Express :8080) + matchmaking (Fastify :8081), multi-stage USER node

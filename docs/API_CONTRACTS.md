@@ -97,7 +97,9 @@ Rate limit: 120 req/min/IP (ventana fija en memoria). CORS: solo `ALLOW_ORIGIN`.
 
 ## 4-b · Agent-service (Agente VANTS · Node/Fastify · :8082)
 
-Cerebro de control total (docs/AGENTE.md). Auth Bearer opcional con
+Cerebro de control total. **El código de este servicio vive en el cuartel de
+los agentes `VANTSNET/flask-Agents` (`services/agent-service`, doc
+`docs/AGENTE.md` del cuartel); este repo es cliente.** Auth Bearer opcional con
 `AGENT_TOKEN` (si está definido, todas las rutas `/api/v1/*` lo exigen;
 `/healthz` nunca). Memoria en Neon (`agent_runs`/`agent_events`/
 `agent_comandos`, migración 25) o RAM sin credenciales.
