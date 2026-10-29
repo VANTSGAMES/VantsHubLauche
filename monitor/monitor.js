@@ -13,7 +13,10 @@ const tls = require('tls');
 const DIR = __dirname;
 let cfg = {
   site: 'https://vants.vants.workers.dev/',
-  proxy: 'https://br-sweet-shape-b42xhogj-vantsdata.compute.c-6.us-east-2.aws.neon.tech/',
+  // Proyecto Neon eliminado (migración a Supabase + worker vants-functions).
+  // El worker vants-functions aún no está desplegado: el check proxy se
+  // reactiva cuando exista. Antes: ...-vantsdata.compute...neon.tech/ (403).
+  proxy: 'https://vants-functions.vants.workers.dev/fn/vantsdata/',
   webhookUrl: '',
   slowMs: 4000,
   certWarnDays: 14,
@@ -37,7 +40,7 @@ const CRIT = [
   { id: 'clips', label: 'Clips', url: cfg.site + 'clips.html' },
   { id: 'bot', label: 'Bot Discord (salud)', url: 'https://vantsbot.vants.workers.dev/salud', markers: ['"ok":true'] },
   { id: 'bus', label: 'VANTS-BUS (salud)', url: 'https://vants-bus.vants.workers.dev/health', markers: ['"ok":true'] },
-  { id: 'proxy', label: 'Neon vantsdata (API)', url: cfg.proxy, markers: ['"ok":true'] },
+  // { id: 'proxy', label: 'vantsdata (API de lectura)', url: cfg.proxy, markers: ['"ok":true'] },  // pendiente: desplegar worker vants-functions
 ];
 const EXTERN = [
   { id: 'auth0', label: 'Auth0 CDN', url: 'https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js' },
@@ -110,12 +113,12 @@ function mejoras(crit, extern, certs) {
   const out = [];
   const web = crit.find((c) => c.id === 'web');
   if (web) {
-    if (!web.headers['content-encoding']) out.push('La web no llega comprimida (gzip/brotli) — revisar cabeceras de GitHub Pages.');
+    if (!web.headers['content-encoding']) out.push('La web no llega comprimida (gzip/brotli) — revisar cabeceras del Worker.');
     const assets = crit.filter((c) => c.id !== 'web' && c.id !== 'proxy');
     const noCache = assets.filter((c) => !(c.headers['cache-control'] || '').includes('max-age'));
     if (noCache.length) out.push(`${noCache.length} assets sin caché (cache-control): ${noCache.map((c) => c.label).join(', ')}.`);
     const total = assets.reduce((s, c) => s + (c.size || 0), 0);
-    out.push(`Peso descargado (JS+CSS, sin comprimir): ~${Math.round(total / 1024)} KB — minificar/partir arena.js si crece.`);
+    out.push(`Peso descargado (JS+CSS, sin comprimir): ~${Math.round(total / 1024)} KB — minificar/partir el JS si crece.`);
     const externos = extern.map((c) => c.label).join(' · ');
     out.push(`Dependencias de terceros en el HTML: ${externos}. Self-host de lucide (assets/vendor) quita el riesgo de que unpkg caiga.`);
     out.push('Añadir <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin> antes del CSS de Google Fonts (los ficheros vienen de gstatic, no de googleapis).');
@@ -171,7 +174,7 @@ function mejoras(crit, extern, certs) {
     const mej = mejoras(crit, extern, certs);
     await discord('📊 VANTS — informe de estado', `Estado global: **${status}** · ${okCount}/${crit.length + extern.length} comprobaciones OK`, COLORS.info, [
       { name: 'Web', value: `${web.status} · ${web.ms}ms · ${Math.round((web.size || 0) / 1024)}KB · ${web.headers['content-encoding'] || 'sin comprimir'}`, inline: true },
-      { name: 'API Neon', value: `${crit.find((c) => c.id === 'proxy').ms}ms`, inline: true },
+      { name: 'API lectura', value: `${(crit.find((c) => c.id === 'proxy') || {}).ms || '—'}${crit.find((c) => c.id === 'proxy') ? 'ms' : ' (pendiente deploy)'}`, inline: true },
       { name: 'SSL', value: hosts.map((h) => `${h}: ${certs[h] == null ? '?' : certs[h] + 'd'}`).join('\n'), inline: false },
       { name: 'Mejoras propuestas', value: mej.map((m, i) => `${i + 1}. ${m}`).join('\n').slice(0, 1000) || '—' },
     ]);
