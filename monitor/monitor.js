@@ -13,9 +13,9 @@ const tls = require('tls');
 const DIR = __dirname;
 let cfg = {
   site: 'https://vants.vants.workers.dev/',
-  // Proyecto Neon eliminado (migración a Supabase + worker vants-functions).
-  // El worker vants-functions aún no está desplegado: el check proxy se
-  // reactiva cuando exista. Antes: ...-vantsdata.compute...neon.tech/ (403).
+  // Proyecto Neon eliminado — la base es la D1 de Cloudflare (vants-db).
+  // Worker vants-functions desplegado: el check proxy vigila la API de lectura.
+  // Antes: ...-vantsdata.compute...neon.tech/ (403).
   proxy: 'https://vants-functions.vants.workers.dev/fn/vantsdata/',
   webhookUrl: '',
   slowMs: 4000,
@@ -40,7 +40,7 @@ const CRIT = [
   { id: 'clips', label: 'Clips', url: cfg.site + 'clips.html' },
   { id: 'bot', label: 'Bot Discord (salud)', url: 'https://vantsbot.vants.workers.dev/salud', markers: ['"ok":true'] },
   { id: 'bus', label: 'VANTS-BUS (salud)', url: 'https://vants-bus.vants.workers.dev/health', markers: ['"ok":true'] },
-  // { id: 'proxy', label: 'vantsdata (API de lectura)', url: cfg.proxy, markers: ['"ok":true'] },  // pendiente: desplegar worker vants-functions
+  { id: 'proxy', label: 'vantsdata (API de lectura)', url: cfg.proxy, markers: ['"ok":true'] },
 ];
 const EXTERN = [
   { id: 'auth0', label: 'Auth0 CDN', url: 'https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js' },
