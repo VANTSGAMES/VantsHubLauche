@@ -31,6 +31,7 @@ permissions:
 
 jobs:
   migrar:
+    if: github.repository == 'VANTSNET/vants-dev-launcher'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # environment: production  (configurar en Settings→Environments con revisores)

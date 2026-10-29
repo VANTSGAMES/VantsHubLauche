@@ -23,6 +23,7 @@ permissions:
 
 jobs:
   notificar:
+    if: github.repository == 'VANTSNET/vants-dev-launcher'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository == 'VANTSNET/vants-dev-launcher'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
