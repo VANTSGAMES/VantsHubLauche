@@ -25,6 +25,7 @@
 
 import CORE from './plataforma-core.js';
 import { debeReportarSentry, sentryEnvelope, validarLote } from './telemetria-core.js';
+import { VantsBus, EVENTS } from '../vants-bus/vants-bus-client.js';
 
 const COLORS = {
   rojo: 0xff0d2e,
@@ -86,6 +87,7 @@ const LIMIT_GPR = 20;        // peticiones por minuto por IP a /api/gpr
 const LIMIT_ACCOUNT = 10;    // peticiones por minuto por IP a /api/account/*
 const LIMIT_TORNEO = 15;     // peticiones por minuto por IP a /api/torneos/*
 const LIMIT_CLIPS = 6;
+const LIMIT_FACEIT = 20;     // peticiones por minuto por IP a /api/faceit/usuario
 const LIMIT_VERCEL = 20;     // peticiones por minuto por IP al webhook de Vercel       // peticiones por minuto por IP a /api/clips/* (subidas/bajas)
 const WINDOW_MS = 60_000;    // ventana de 1 minuto
 const MAX_BODY_NOTIFY = 8192; // máximo 8 KB por notificación
@@ -93,13 +95,15 @@ const MAX_CLIP_BYTES = 48 * 1024 * 1024; // vídeo destacado: máx 48 MB
 const MAX_THUMB_BYTES = 400 * 1024;      // miniatura JPEG: máx 400 KB
 
 /* ==================== CLIPS DESTACADOS (GitHub Releases) ====================
-   Repositorio público que almacena los clips que los jugadores destacan:
+   Repositorio que almacena los clips que los jugadores destacan:
    cada clip = un release con 2 assets (video + miniatura), inmutable una vez
    publicado. El índice (manifest.json) vive en el contents del repo y se
    actualiza atómicamente (sha). El video lo sube el navegador con el JWT de
    su sesión; el Worker valida el token (JWKS de Auth0) y nunca acepta un
-   sub distinto al de la sesión. Sin sesión no se publica nada. */
-const GH_CLIPS_REPO = 'VANTSgg/vants-clips';
+   sub distinto al de la sesión. Sin sesión no se publica nada.
+   Repo bajo la org VANTSCC (trasladado desde VANTSgg: GitHub redirige los
+   assets viejos, pero la API apunta a la org actual). */
+const GH_CLIPS_REPO = 'VANTSNET/vants-clips';
 const GH_API = 'https://api.github.com/repos/' + GH_CLIPS_REPO;
 const CLIPS_EXT = ['webm', 'mp4', 'mkv', 'mov', 'm4v'];
 const MAX_MANIFEST_ENTRIES = 60;
@@ -137,6 +141,9 @@ const rlEsports = new Map();
 const rlTeams = new Map();
 const rlGpr = new Map();
 const rlAccount = new Map();
+const rlFaceit = new Map();
+// Caché de nicks de FACEIT (nivel módulo: sobrevive entre peticiones aisladas)
+const faceitCacheMod = new Map();
 const rlTorneo = new Map();
 const rlLectura = new Map(); // API pública de la plataforma de torneos (lectura)
 const LIMIT_LECTURA = 60;    // peticiones por minuto por IP a los endpoints públicos nuevos
@@ -182,10 +189,10 @@ function urlTorneos(lang, juego, estado) {
   return BASE_URL + '/' + lang + '/tournaments/' + juego + '/' + estado;
 }
 
-// Proxy público de lectura (vantsdata · Neon Function): whitelist de tablas,
-// strip de columnas sensibles, rate limit y Content-Range con _count=exact.
+// Proxy público de lectura: whitelist de tablas, strip de columnas sensibles,
+// rate limit y Content-Range con _count=exact.
 // D1 (todo en Cloudflare): las lecturas van DIRECTAS al binding DB (vants-db);
-// el Worker NUNCA guarda credenciales de la base (patrón de la casa).
+// ya no hay proxy a Neon/Supabase ni credenciales en el Worker.
 let _d1 = null; // se asigna en cada fetch con env.DB
 const PERMITIDAS_LECTURA = new Set([
   'players', 'season_player_stats', 'seasons', 'leaderboard', 'tournaments',
@@ -429,8 +436,9 @@ async function paginaTorneos(env, request, url, lang, juego, estado) {
 
 // Tenant Auth0 del sitio (misma configuración que assets/js/auth0-config.js)
 const AUTH0_TENANT = 'vants.eu.auth0.com';
-// D1 (todo en Cloudflare): las lecturas/escrituras de torneos van directas al
-// binding DB (vants-db). Ya no hay Data API externa ni token hacia ella.
+// Neon Data API (PostgREST): el Worker NUNCA guarda credenciales de la base;
+// D1 (todo en Cloudflare): lecturas/escrituras de torneos directas al binding
+// DB (vants-db). Ya no hay Data API externa (Neon/Supabase) ni apikey anon.
 
 // Valida el JWT de la sesión contra Auth0 /userinfo → { sub, email } | null
 async function infoDeSesion(token) {
@@ -443,6 +451,40 @@ async function infoDeSesion(token) {
     const info = await ui.json();
     return info && info.sub ? info : null;
   } catch (e) { return null; }
+}
+
+// --- 3c) VANTS-BUS · publicación de eventos del Worker hacia el bus.
+// Apagada por completo si faltan VANTS_BUS_URL o VANTS_BUS_SECRET: sin
+// configuración no hay red, ni errores, y el resto del Worker funciona igual.
+// El secreto solo vive del lado del Worker (nunca llega al navegador).
+let _busCli = null;
+function busCliente(env) {
+  if (!env || !env.VANTS_BUS_URL || !env.VANTS_BUS_SECRET) return null;
+  if (!_busCli) {
+    _busCli = new VantsBus({
+      busUrl: env.VANTS_BUS_URL,
+      projectId: 'playvants-web',
+      secret: env.VANTS_BUS_SECRET,
+    });
+  }
+  return _busCli;
+}
+
+/* Publica un evento sin bloquear la respuesta: el envío va por
+ * ctx.waitUntil y un fallo del bus se registra pero nunca rompe
+ * el endpoint que lo originó (el evento comunica algo que ya pasó). */
+function publicarBus(env, ctx, type, data) {
+  try {
+    const cli = busCliente(env);
+    if (!cli || !ctx || typeof ctx.waitUntil !== 'function') return;
+    ctx.waitUntil(
+      cli.publish(type, data).catch((e) => {
+        try {
+          console.error(JSON.stringify({ tipo: 'bus_publicacion_error', type, message: String((e && e.message) || e).slice(0, 200) }));
+        } catch (eLog) {}
+      })
+    );
+  } catch (e) {}
 }
 
 // LECTURA sobre D1 de rutas estilo PostgREST: '/tabla?col=eq.val&select=a,b&limit=n'
@@ -485,6 +527,8 @@ async function neonGet(rutaRelativa, token) {
     return { ok: false, status: 500, body: [] };
   }
 }
+
+// (hRestDb eliminado: con D1 no hay cabeceras REST externas que construir)
 
 function rateLimit(bucket, ip, max) {
   const now = Date.now();
@@ -1057,13 +1101,13 @@ async function fetchWorker(request, env, ctx) {
     // --- 2) Pre-flight CORS solo para la API propia
     if (method === 'OPTIONS') {
       const origin = request.headers.get('origin') || '';
-      const isGetApi = url.pathname === '/api/valorant/esports' || url.pathname === '/api/teams' || url.pathname === '/api/teams-live' || url.pathname === '/api/gpr' || url.pathname === '/api/clips/featured' || url.pathname === '/api/torneos/bracket' || url.pathname === '/api/en-vivo' || url.pathname === '/api/games' || url.pathname === '/api/tournaments' || url.pathname === '/api/matches' || url.pathname === '/api/players' || url.pathname === '/api/articles' || url.pathname === '/api/search' || /^\/api\/tournaments\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/articles\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/teams\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/players\/[a-z0-9-]+$/.test(url.pathname);
-      const isPostApi = url.pathname === '/api/discord/notify' || url.pathname === '/api/account/email-verify' || url.pathname === '/api/account/password-reset' || url.pathname === '/api/clips/featured' || url.pathname === '/api/torneos/inscribir' || url.pathname === '/api/torneos/gestionar' || url.pathname === '/api/telemetria';
+      const isGetApi = url.pathname === '/api/valorant/esports' || url.pathname === '/api/teams' || url.pathname === '/api/teams-live' || url.pathname === '/api/gpr' || url.pathname === '/api/clips/featured' || url.pathname === '/api/torneos/bracket' || url.pathname === '/api/en-vivo' || url.pathname === '/api/faceit/usuario' || url.pathname === '/api/faceit/historia' || url.pathname === '/api/account/perfil' || url.pathname === '/api/account/progreso' || url.pathname === '/api/games' || url.pathname === '/api/tournaments' || url.pathname === '/api/matches' || url.pathname === '/api/players' || url.pathname === '/api/articles' || url.pathname === '/api/search' || /^\/api\/tournaments\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/articles\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/teams\/[a-z0-9-]+$/.test(url.pathname) || /^\/api\/players\/[a-z0-9-]+$/.test(url.pathname);
+      const isPostApi = url.pathname === '/api/discord/notify' || url.pathname === '/api/account/email-verify' || url.pathname === '/api/account/password-reset' || url.pathname === '/api/account/perfil' || url.pathname === '/api/clips/featured' || url.pathname === '/api/torneos/inscribir' || url.pathname === '/api/torneos/gestionar' || url.pathname === '/api/telemetria';
       if ((isPostApi || isGetApi) && SITE_ORIGINS.has(origin)) {
         return harden(new Response(null, { status: 204 }), {
           'Access-Control-Allow-Origin': origin,
-          'Access-Control-Allow-Methods': url.pathname === '/api/clips/featured' ? 'GET, POST, DELETE, OPTIONS' : (isGetApi ? 'GET, OPTIONS' : 'POST, OPTIONS'),
-          'Access-Control-Allow-Headers': isPostApi ? 'Content-Type, ' + AUTH_HEADER + ', X-Vants-Signature, X-Vants-Timestamp' : 'Content-Type',
+          'Access-Control-Allow-Methods': url.pathname === '/api/clips/featured' ? 'GET, POST, DELETE, OPTIONS' : ((url.pathname === '/api/account/perfil') ? 'GET, POST, OPTIONS' : (isGetApi ? 'GET, OPTIONS' : 'POST, OPTIONS')),
+          'Access-Control-Allow-Headers': 'Content-Type, ' + AUTH_HEADER + ', X-Vants-Signature, X-Vants-Timestamp',
           'Access-Control-Max-Age': '86400',
         });
       }
@@ -1080,6 +1124,12 @@ async function fetchWorker(request, env, ctx) {
     if (url.pathname === '/api/health') {
       if (method !== 'GET') return json({ ok: false, error: 'Solo GET' }, 405, { Allow: 'GET' });
       return json({ ok: true, servicio: 'vants-worker', ts: new Date().toISOString() }, 200, { 'Cache-Control': 'no-store' });
+    }
+
+    // Healthcheck de la web S4 (mismo contrato que playvants.vercel.app/healthz)
+    if (url.pathname === '/healthz') {
+      if (method !== 'GET') return json({ ok: false, error: 'Solo GET' }, 405, { Allow: 'GET' });
+      return json({ ok: true, version: 'S4', web: 'VANTS GAMES' }, 200, { 'Cache-Control': 'no-store' });
     }
 
     if (url.pathname === '/api/telemetria') {
@@ -1380,7 +1430,7 @@ async function fetchWorker(request, env, ctx) {
 
     // --- 7b1b) EN VIVO: jugadores conectados / jugando AHORA (presencia).
     // Fuente: vista v_en_vivo (presence actualizado hace < 2 min). Lectura
-    // pública; con sesión el token va y RLS confirma. Caché 10 s.
+    // pública vía proxy vantsdata. Caché 10 s.
     if (url.pathname === '/api/en-vivo') {
       if (method !== 'GET') {
         return json({ ok: false, error: 'Solo GET' }, 405, { Allow: 'GET' });
@@ -1400,10 +1450,11 @@ async function fetchWorker(request, env, ctx) {
         resC.headers.set('Cache-Control', 'public, max-age=10');
         return resC;
       }
-      const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+      // Lectura pública por el proxy vantsdata (la Data API exige JWT y esta
+      // ruta es anónima). La vista no lleva PII.
       let payload2 = null;
       try {
-        const r = await neonGet('/v_en_vivo?order=actualizado.desc&limit=50', token || null);
+        const r = await proxyConsulta('v_en_vivo', { order: 'actualizado.desc', limit: 50 });
         if (r.ok) payload2 = { ok: true, jugadores: r.body, ahora: new Date().toISOString() };
       } catch (e) { payload2 = null; }
       if (!payload2) payload2 = { ok: false, motivo: 'base_no_disponible', jugadores: [] };
@@ -1431,12 +1482,11 @@ async function fetchWorker(request, env, ctx) {
       if (!torneo || !/^[a-z0-9_-]{1,40}$/i.test(torneo)) {
         return json({ ok: false, error: 'torneo_invalido' }, 400, { 'Access-Control-Allow-Origin': origin || '*' });
       }
-      const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
       let equipos = [], llaves = [];
       try {
         const [re, rb] = await Promise.all([
-          neonGet('/v_torneo_equipos?tournament_id=eq.' + encodeURIComponent(torneo) + '&order=created_at', token || null),
-          neonGet('/v_torneo_bracket?tournament_id=eq.' + encodeURIComponent(torneo) + '&limit=100', token || null),
+          proxyConsulta('v_torneo_equipos', { 'tournament_id.eq': torneo, order: 'created_at' }),
+          proxyConsulta('v_torneo_bracket', { 'tournament_id.eq': torneo, limit: 100 }),
         ]);
         if (re.ok) equipos = re.body;
         if (rb.ok) llaves = rb.body;
@@ -1520,7 +1570,16 @@ async function fetchWorker(request, env, ctx) {
         const dup = /UNIQUE|duplicate/i.test(det);
         return json({ ok: false, error: dup ? 'equipo_ya_inscrito' : 'base_rechazo', detalle: det.slice(0, 300) }, dup ? 409 : 502, ACAO);
       }
-      return json({ ok: true, equipo: fila }, 200, ACAO);
+      const filaCreada = fila;
+      // VANTS-BUS: la inscripción ya está guardada; flask-agents puede
+      // postearla en Discord y VANTS HUB muestra la notificación.
+      // El envío no bloquea ni rompe la respuesta del endpoint.
+      publicarBus(env, ctx, EVENTS.INSCRIPTION_CREATED, {
+        tournamentId: torneo,
+        teamId: (filaCreada && filaCreada.id) || null,
+        game: juego,
+      });
+      return json({ ok: true, equipo: filaCreada }, 200, ACAO);
     }
 
     // --- 7b1e) TORNEOS: gestión del OWNER (confirmar/rechazar equipos,
@@ -1557,7 +1616,7 @@ async function fetchWorker(request, env, ctx) {
       }
       const body = await request.json().catch(() => ({}));
       const accion = String((body && body.accion) || '');
-      const hAuth = { 'Content-Type': 'application/json', [AUTH_HEADER]: 'Bearer ' + token, Prefer: 'return=representation' };
+      const hAuth = hRestDb(token, { 'Content-Type': 'application/json', Prefer: 'return=representation' });
       try {
         if (accion === 'equipo') {
           const id = String(body.id || '');
@@ -1586,6 +1645,36 @@ async function fetchWorker(request, env, ctx) {
             `UPDATE tournament_matches SET score_a = ?, score_b = ?, estado = ?, ganador = ?, updated_at = datetime('now') WHERE id = ?`
           ).bind(parche.score_a, parche.score_b, parche.estado, parche.ganador, id).run();
           if (!r.success) return json({ ok: false, error: 'base_rechazo', detalle: 'update_fallo' }, 502, ACAO);
+          if (estado === 'final') {
+            // VANTS-BUS: resultado de bracket cerrado. La tabla guarda ids,
+            // así que se resuelven los NOMBRES de los equipos antes de publicar.
+            // Resolución y envío van en waitUntil: la respuesta no espera.
+            const finalizadoEn = new Date().toISOString();
+            ctx.waitUntil((async () => {
+              try {
+                const ga = await neonGet('/tournament_teams?id=eq.' + m.team_a + '&select=id,name,game', token);
+                const gb = await neonGet('/tournament_teams?id=eq.' + m.team_b + '&select=id,name,game', token);
+                const nom = (filas, tid) => {
+                  const f = (filas.ok && filas.body ? filas.body : []).find((x) => x && x.id === tid);
+                  return (f && f.name) || tid;
+                };
+                const juegoEv = (ga.ok && ga.body && ga.body[0] && ga.body[0].game) || 'valorant';
+                const cli = busCliente(env);
+                if (!cli) return;
+                await cli.publish(EVENTS.MATCH_FINISHED, {
+                  matchId: id,
+                  game: juegoEv,
+                  a: nom(ga, m.team_a),
+                  b: nom(gb, m.team_b),
+                  sa,
+                  sb,
+                  finishedAt: finalizadoEn,
+                }).catch((eBus) => {
+                  try { console.error(JSON.stringify({ tipo: 'bus_publicacion_error', type: 'match.finished', message: String((eBus && eBus.message) || eBus).slice(0, 200) })); } catch (eLog) {}
+                });
+              } catch (e) {}
+            })());
+          }
           return json({ ok: true, accion, ganador: parche.ganador }, 200, ACAO);
         }
         if (accion === 'sembrar') {
@@ -1801,6 +1890,445 @@ async function fetchWorker(request, env, ctx) {
       }
     }
 
+    // --- 7b2d) FACEIT: verificación REAL de nick contra la API pública de
+    // FACEIT (api.faceit.com/users/v1/nicknames/{nick}, sin API key). La usa
+    // el perfil para CONECTAR la cuenta de FACEIT con datos verdaderos: nick,
+    // país, nivel (skill_level) y avatar. Caché de 60 s por nick.
+    const faceitCache = faceitCacheMod;
+    if (url.pathname === '/api/faceit/usuario') {
+      const originF = request.headers.get('origin') || '';
+      if (originF && !SITE_ORIGINS.has(originF)) {
+        return json({ ok: false, error: 'Origen no permitido' }, 403, { 'Access-Control-Allow-Origin': originF || '*' });
+      }
+      const aF = rateLimit(rlFaceit, ip, LIMIT_FACEIT);
+      if (!aF.ok) {
+        return json({ ok: false, error: 'Demasiadas peticiones' }, 429, { 'Retry-After': String(aF.retry), 'Access-Control-Allow-Origin': originF || '*' });
+      }
+      const nick = url.searchParams.get('nick') || '';
+      if (!/^[a-zA-Z0-9_.\-]{2,24}$/.test(nick)) {
+        return json({ ok: false, error: 'nick_invalido' }, 400, { 'Access-Control-Allow-Origin': originF || '*' });
+      }
+      /* S4.7.1: caché por nick TAL CUAL (la API de FACEIT distingue la caja:
+         "feiss" y "FEISS" pueden ser cuentas distintas — no cruzar datos). */
+      const clave = nick;
+      const ahora = Date.now();
+      if (faceitCache.has(clave) && ahora - faceitCache.get(clave).at < 60000) {
+        const c = faceitCache.get(clave);
+        return json(c.body, c.body.ok ? 200 : 404, { 'Access-Control-Allow-Origin': originF || '*', 'Cache-Control': 'public, max-age=60' });
+      }
+      let salida;
+      try {
+        /* La API de FACEIT es estricta con mayúsculas/minúsculas ("s1mple" ≠
+           "S1mple") y no tiene búsqueda pública: probamos el nick tal cual y
+           3 variantes de caja (minúsculas, MAYÚSCULAS, Capitalizada) antes de
+           dar el nick por inexistente. */
+        const variantes = [];
+        const apuntar = (v) => {
+          if (v && v.length >= 2 && v.length <= 24 && /^[a-zA-Z0-9_.\-]+$/.test(v) && !variantes.includes(v)) variantes.push(v);
+        };
+        apuntar(nick);
+        apuntar(nick.toLowerCase());
+        apuntar(nick.toUpperCase());
+        apuntar(nick.charAt(0).toUpperCase() + nick.slice(1).toLowerCase());
+        let payload = null;
+        for (const variante of variantes) {
+          const r = await fetch('https://api.faceit.com/users/v1/nicknames/' + encodeURIComponent(variante), {
+            headers: { 'User-Agent': 'vants-worker', Accept: 'application/json' },
+            signal: AbortSignal.timeout(9000),
+          });
+          if (r.status === 200) {
+            const j = await r.json().catch(() => null);
+            if (j && j.payload && j.payload.nickname) { payload = j.payload; break; }
+          } else if (r.status !== 404) {
+            salida = { ok: false, error: 'faceit_no_responde' };
+            break;
+          }
+        }
+        if (!salida) {
+          if (!payload) {
+            salida = { ok: false, error: 'no_encontrado' };
+          } else {
+            const juegos = payload.games || {};
+            const cs = juegos.cs2 || juegos.csgo || {};
+            salida = {
+              ok: true,
+              usuario: {
+                id: String(payload.id || '').slice(0, 40),
+                nickname: String(payload.nickname).slice(0, 24),
+                pais: String(payload.country || '').toLowerCase().slice(0, 8),
+                avatar: String(payload.avatar || '').slice(0, 300) || null,
+                nivel: Number.isFinite(cs.skill_level) ? cs.skill_level : null,
+                region: String(cs.region || '').slice(0, 8) || null,
+                /* S4.7: elo y fecha de registro de FACEIT para el panel nuevo */
+                elo: Number.isFinite(cs.elo) ? cs.elo : null,
+                desde: payload.activated_at ? String(payload.activated_at).slice(0, 24) : null,
+              },
+            };
+          }
+        }
+      } catch (eFA) {
+        salida = { ok: false, error: 'faceit_no_responde' };
+      }
+      if (faceitCache.size > 400) faceitCache.clear();
+      faceitCache.set(clave, { at: ahora, body: salida });
+      return json(salida, salida.ok ? 200 : (salida.error === 'no_encontrado' ? 404 : 502), { 'Access-Control-Allow-Origin': originF || '*', 'Cache-Control': 'public, max-age=60' });
+    }
+
+    // --- 7b2d2) FACEIT HISTORIA (S4.7): historial REAL de partidas CS2 del
+    // jugador con la Data API oficial v4 (open.faceit.com) usando el secret
+    // FACEIT_API_KEY. Alimenta el panel nuevo del perfil: partidos recientes,
+    // rendimiento reciente y actividad por día. Si la clave no está o FACEIT
+    // rechaza, responde { ok:false, motivo } y el perfil muestra un estado
+    // honesto (nunca datos inventados). Caché de 120 s por nick.
+    if (url.pathname === '/api/faceit/historia') {
+      const originH = request.headers.get('origin') || '';
+      if (originH && !SITE_ORIGINS.has(originH)) {
+        return json({ ok: false, error: 'Origen no permitido' }, 403, { 'Access-Control-Allow-Origin': originH || '*' });
+      }
+      const aH = rateLimit(rlFaceit, ip, LIMIT_FACEIT);
+      if (!aH.ok) {
+        return json({ ok: false, error: 'Demasiadas peticiones' }, 429, { 'Retry-After': String(aH.retry), 'Access-Control-Allow-Origin': originH || '*' });
+      }
+      const nickH = url.searchParams.get('nick') || '';
+      const idH = url.searchParams.get('id') || '';
+      /* S4.7.1: si llega el ID de jugador (guardado al conectar la cuenta), se
+         usa directo — el nick solo es el plan B. Así la historia SIEMPRE es de
+         la cuenta correcta aunque existan nicks que se diferencien por caja. */
+      const pidDirecto = /^[a-f0-9\-]{8,40}$/i.test(idH) ? idH : '';
+      if (!pidDirecto && !/^[a-zA-Z0-9_.\-]{2,24}$/.test(nickH)) {
+        return json({ ok: false, error: 'nick_invalido' }, 400, { 'Access-Control-Allow-Origin': originH || '*' });
+      }
+      const claveH = 'hist:' + (pidDirecto ? 'id:' + pidDirecto.toLowerCase() : 'n:' + nickH);
+      const ahoraH = Date.now();
+      if (faceitCache.has(claveH) && ahoraH - faceitCache.get(claveH).at < 120000) {
+        const cH = faceitCache.get(claveH);
+        return json(cH.body, 200, { 'Access-Control-Allow-Origin': originH || '*', 'Cache-Control': 'public, max-age=120' });
+      }
+      const cabH = {
+        Authorization: 'Bearer ' + String((env && env.FACEIT_API_KEY) || ''),
+        'User-Agent': 'vants-worker',
+        Accept: 'application/json',
+      };
+      let salidaH;
+      try {
+        if (!String(cabH.Authorization).replace('Bearer', '').trim()) {
+          salidaH = { ok: false, motivo: 'sin_api_key' };
+        } else {
+          /* 1) jugador: por ID directo (preferente) o resolviendo el nick (v4) */
+          let pidH = pidDirecto;
+          let perfilH = null;
+          if (!pidH) {
+            const rP = await fetch('https://open.faceit.com/data/v4/players?nickname=' + encodeURIComponent(nickH), {
+              headers: cabH, signal: AbortSignal.timeout(9000),
+            });
+            if (rP.status === 401 || rP.status === 403) {
+              salidaH = { ok: false, motivo: 'faceit_key' };
+            } else if (rP.status === 404) {
+              salidaH = { ok: false, motivo: 'no_encontrado' };
+            } else if (!rP.ok) {
+              salidaH = { ok: false, motivo: 'faceit_no_responde' };
+            } else {
+              perfilH = await rP.json().catch(() => null);
+              pidH = perfilH && perfilH.player_id;
+              if (!pidH) salidaH = { ok: false, motivo: 'no_encontrado' };
+            }
+          } else {
+            const rP2 = await fetch('https://open.faceit.com/data/v4/players/' + encodeURIComponent(pidH), {
+              headers: cabH, signal: AbortSignal.timeout(9000),
+            });
+            if (rP2.ok) perfilH = await rP2.json().catch(() => null);
+          }
+          if (!salidaH && pidH) {
+            /* 2) historial CS2 (últimas 20, usamos hasta 12) */
+            const rHi = await fetch('https://open.faceit.com/data/v4/players/' + encodeURIComponent(pidH) + '/history?game=cs2&limit=20', {
+              headers: cabH, signal: AbortSignal.timeout(9000),
+            });
+            const jHi = rHi.ok ? await rHi.json().catch(() => null) : null;
+            const items = (jHi && Array.isArray(jHi.items)) ? jHi.items.slice(0, 12) : [];
+            /* 3) estadísticas por partido (en paralelo, máx 10 subpeticiones) */
+            const detalles = await Promise.all(items.slice(0, 10).map(async (it) => {
+              try {
+                const rM = await fetch('https://open.faceit.com/data/v4/matches/' + encodeURIComponent(String(it.match_id || '')) + '/stats', {
+                  headers: cabH, signal: AbortSignal.timeout(9000),
+                });
+                if (!rM.ok) return null;
+                const jM = await rM.json().catch(() => null);
+                const round = jM && jM.rounds && jM.rounds[0];
+                if (!round || !round.round_stats || !Array.isArray(round.teams)) return null;
+                const rs = round.round_stats;
+                let eqMio = null;
+                let yo = null;
+                for (const t of round.teams) {
+                  const ps = (t.players || []).find((p) => p && p.player_id === pidH);
+                  if (ps) { eqMio = t; yo = ps; break; }
+                }
+                if (!yo || !eqMio) return null;
+                const gps = yo.game_player_stats || {};
+                const kills = Number(gps.Kills || 0);
+                const muertes = Number(gps.Deaths || 0);
+                const asis = Number(gps.Assists || 0);
+                const gano = String(eqMio.team_id) === String(rs.Winner);
+                const trozos = String(rs.Score || '').split('/');
+                const esLocal = String(eqMio.team_id) === String((round.teams[0] || {}).team_id);
+                const s0 = parseInt(trozos[0], 10) || 0;
+                const s1 = parseInt(trozos[1], 10) || 0;
+                const hsPct = Number(gps['Headshots %']);
+                const krR = Number(gps['K/R Ratio']);
+                return {
+                  fecha: it.started_at ? String(it.started_at).slice(0, 10) : null,
+                  mapa: String(rs.Map || '').slice(0, 20) || null,
+                  gano: gano,
+                  score: (esLocal ? s0 : s1) + ':' + (esLocal ? s1 : s0),
+                  kills: kills,
+                  muertes: muertes,
+                  asis: asis,
+                  hs: Number.isFinite(hsPct) ? hsPct : null,
+                  kr: Number.isFinite(krR) ? krR : null,
+                  kd: muertes > 0 ? Math.round((kills / muertes) * 100) / 100 : kills,
+                  mvp: Number(gps.MVPs || 0) || 0,
+                };
+              } catch (_eM) {
+                return null;
+              }
+            }));
+            const partidas = detalles.filter(Boolean);
+            const promH = (lista) => (lista.length ? Math.round((lista.reduce((a, b) => a + b, 0) / lista.length) * 100) / 100 : null);
+            const victoriasH = partidas.filter((p) => p.gano).length;
+            const csGH = (perfilH && perfilH.games && (perfilH.games.cs2 || perfilH.games.csgo)) || {};
+            salidaH = {
+              ok: partidas.length > 0,
+              motivo: partidas.length > 0 ? null : 'sin_partidas',
+              resumen: {
+                jugadas: partidas.length,
+                victorias: victoriasH,
+                winrate: partidas.length ? Math.round((victoriasH / partidas.length) * 1000) / 10 : null,
+                kd: promH(partidas.map((p) => p.kd)),
+                kr: promH(partidas.map((p) => p.kr).filter((v) => v !== null)),
+                hs: promH(partidas.map((p) => p.hs).filter((v) => v !== null)),
+                mvp: partidas.reduce((a, p) => a + (p.mvp || 0), 0),
+                nivel: Number.isFinite(csGH.skill_level) ? csGH.skill_level : null,
+                elo: Number.isFinite(csGH.elo) ? csGH.elo : null,
+              },
+              partidas: partidas,
+            };
+          }
+        }
+      } catch (eHI) {
+        salidaH = { ok: false, motivo: 'faceit_no_responde' };
+      }
+      if (faceitCache.size > 400) faceitCache.clear();
+      faceitCache.set(claveH, { at: ahoraH, body: salidaH });
+      return json(salidaH, salidaH.ok ? 200 : 502, { 'Access-Control-Allow-Origin': originH || '*', 'Cache-Control': 'public, max-age=120' });
+    }
+
+    // --- 7b1) Cuenta: PROGRESO DEL AGENTE (rango, insignia y barra de XP).
+    // GET (con sesión): lee la fila del jugador en D1 (players) por auth0_sub
+    // de la sesión — con puente al formato del bot para sesiones de Discord
+    // ('discord|123' → auth_user_id 'discord:123') — y devuelve XP total,
+    // rango VANTS (MISMA escala que RANGOS_VANTS del bot en src/rangos.js),
+    // % de la barra hacia el siguiente rango y el rango competitivo de
+    // Valorant que guardó el bot en players.stats.valorant.
+    if (url.pathname === '/api/account/progreso') {
+      const originPg = request.headers.get('origin') || '';
+      if (!SITE_ORIGINS.has(originPg)) {
+        return json({ ok: false, error: 'Origen no permitido' }, 403, { 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+      if (method !== 'GET') {
+        return json({ ok: false, error: 'Método no permitido' }, 405, { Allow: 'GET, OPTIONS', 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+      const aPg = rateLimit(rlAccount, ip, LIMIT_ACCOUNT);
+      if (!aPg.ok) {
+        return json({ ok: false, error: 'Demasiadas peticiones' }, 429, { 'Retry-After': String(aPg.retry), 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+      const sesPg = await verifySesionJwt(request);
+      if (!sesPg || !sesPg.sub) {
+        return json({ ok: false, error: 'sin_sesion' }, 401, { 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+      if (!_d1) {
+        return json({ ok: false, error: 'db_no_configurada' }, 503, { 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+      try {
+        const subPg = String(sesPg.sub);
+        const rPg = await _d1.prepare(
+          `SELECT display_name, username, xp, rating, trend, verified, stats
+             FROM players
+            WHERE auth0_sub = ?1
+               OR auth_user_id = ?1
+               OR auth_user_id = REPLACE(?1, '|', ':')
+            ORDER BY xp DESC LIMIT 1`
+        ).bind(subPg).all();
+        const filaPg = (rPg && rPg.results && rPg.results[0]) || null;
+        const xpPg = filaPg && Number.isFinite(Number(filaPg.xp)) ? Math.max(0, Math.floor(Number(filaPg.xp))) : 0;
+        // Escala de rangos: MISMA que RANGOS_VANTS del bot (src/rangos.js del
+        // vantsbot). Los colores/IDs coinciden con la constante RANGOS del
+        // frontend (perfil_pagina.js) y con las imágenes /static/img/rangos/.
+        const RANGOS_PG = [
+          { id: 'ceniza',   nombre: 'CENIZA',   desde: 0,    color: '#b8bfc7' },
+          { id: 'hierro',   nombre: 'HIERRO',   desde: 1000, color: '#8b93a1' },
+          { id: 'bronce',   nombre: 'BRONCE',   desde: 2000, color: '#b0793f' },
+          { id: 'plata',    nombre: 'PLATA',    desde: 3000, color: '#c3ccd9' },
+          { id: 'oro',      nombre: 'ORO',      desde: 4000, color: '#e3b341' },
+          { id: 'platino',  nombre: 'PLATINO',  desde: 5000, color: '#35c8d8' },
+          { id: 'diamante', nombre: 'DIAMANTE', desde: 6000, color: '#a45de8' },
+          { id: 'inmortal', nombre: 'INMORTAL', desde: 7000, color: '#2fbf8f' },
+          { id: 'supremo',  nombre: 'SUPREMO',  desde: 8000, color: '#3f8cff' }
+        ];
+        let idxPg = 0;
+        for (let i = 0; i < RANGOS_PG.length; i++) if (xpPg >= RANGOS_PG[i].desde) idxPg = i;
+        const actualPg = RANGOS_PG[idxPg];
+        const sigPg = RANGOS_PG[idxPg + 1] || null;
+        const tramoPg = sigPg ? (sigPg.desde - actualPg.desde) : Math.max(1, xpPg - actualPg.desde);
+        const enTramoPg = xpPg - actualPg.desde;
+        const progresoPg = sigPg ? Math.max(0, Math.min(100, Math.round((enTramoPg / tramoPg) * 100))) : 100;
+        // Rango competitivo de Valorant (lo sincroniza el bot, opción C HDEV)
+        let valoPg = null;
+        try {
+          const stPg = filaPg && filaPg.stats ? JSON.parse(filaPg.stats) : null;
+          if (stPg && stPg.valorant && stPg.valorant.tier) {
+            valoPg = {
+              tier: String(stPg.valorant.tier).slice(0, 40),
+              rr: Number.isFinite(Number(stPg.valorant.rr)) ? Math.max(0, Math.min(100, Math.floor(Number(stPg.valorant.rr)))) : null,
+              icono: String(stPg.valorant.icono || '').slice(0, 300) || null,
+              actualizado: String(stPg.valorant.actualizado || '').slice(0, 30) || null
+            };
+          }
+        } catch (e) { /* stats corruptos: se ignora, no tira el panel */ }
+        return json({
+          ok: true,
+          sin_cuenta: !filaPg,
+          jugador: {
+            display_name: (filaPg && (filaPg.display_name || filaPg.username)) || null,
+            username: (filaPg && filaPg.username) || null,
+            verified: !!(filaPg && Number(filaPg.verified))
+          },
+          xp: xpPg,
+          rango: {
+            id: actualPg.id,
+            nombre: actualPg.nombre,
+            color: actualPg.color,
+            insignia: '/static/img/rangos/rango-' + actualPg.id + '.png',
+            desde: actualPg.desde,
+            hasta: sigPg ? sigPg.desde : null,
+            progreso: progresoPg
+          },
+          siguiente: sigPg ? { id: sigPg.id, nombre: sigPg.nombre, falta: sigPg.desde - xpPg } : null,
+          valorant: valoPg,
+          rating: filaPg && Number.isFinite(Number(filaPg.rating)) ? Number(filaPg.rating) : null
+        }, 200, { 'Access-Control-Allow-Origin': originPg || '*' });
+      } catch (errPg) {
+        return json({ ok: false, error: 'progreso_no_disponible' }, 502, { 'Access-Control-Allow-Origin': originPg || '*' });
+      }
+    }
+    // --- 7b2e) Cuenta: NOMBRE DE LA CUENTA + REDES CONECTADAS (Auth0 Mgmt).
+    // GET (con sesión): devuelve nickname y user_metadata.redes del usuario.
+    // POST (con sesión): cambia el nickname (el nombre público de la cuenta;
+    // si no se cambia nunca es el que Auth0 saca del correo) y guarda las
+    // redes conectadas (discord/twitch/youtube/riot/faceit) en user_metadata,
+    // así las conexiones siguen a la cuenta en cualquier dispositivo.
+    // Requiere M2M con update:users + read:users (los mismos tickets ya usan).
+    if (url.pathname === '/api/account/perfil') {
+      const originP2 = request.headers.get('origin') || '';
+      if (!SITE_ORIGINS.has(originP2)) {
+        return json({ ok: false, error: 'Origen no permitido' }, 403, { 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+      if (method !== 'GET' && method !== 'POST') {
+        return json({ ok: false, error: 'Método no permitido' }, 405, { Allow: 'GET, POST, OPTIONS', 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+      const aP2 = rateLimit(rlAccount, ip, LIMIT_ACCOUNT);
+      if (!aP2.ok) {
+        return json({ ok: false, error: 'Demasiadas peticiones' }, 429, { 'Retry-After': String(aP2.retry), 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+      const sesP2 = await verifySesionJwt(request);
+      if (!sesP2 || !sesP2.sub) {
+        return json({ ok: false, error: 'sin_sesion' }, 401, { 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+      const mId2 = (env && env.AUTH0_MGMT_CLIENT_ID) || '';
+      const mSec2 = (env && env.AUTH0_MGMT_CLIENT_SECRET) || '';
+      if (!mId2 || !mSec2) {
+        return json({ ok: false, error: 'mgmt_no_config' }, 503, { 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+      try {
+        const mt2 = await fetch('https://' + AUTH0_TENANT + '/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'client_credentials',
+            client_id: mId2,
+            [SECRET_FIELD]: mSec2,
+            audience: 'https://' + AUTH0_TENANT + '/api/v2/',
+          }),
+        });
+        if (!mt2.ok) {
+          return json({ ok: false, error: 'mgmt_token' }, 502, { 'Access-Control-Allow-Origin': originP2 || '*' });
+        }
+        const mtj2 = await mt2.json();
+        const mgmtH2 = { 'Content-Type': 'application/json', [AUTH_HEADER]: 'Bearer ' + mtj2.access_token };
+
+        if (method === 'GET') {
+          const ru = await fetch('https://' + AUTH0_TENANT + '/api/v2/users/' + encodeURIComponent(sesP2.sub) + '?fields=nickname,user_metadata&include_fields=true', {
+            headers: mgmtH2, signal: AbortSignal.timeout(9000),
+          });
+          if (!ru.ok) {
+            return json({ ok: false, error: 'usuario_no_leido' }, 502, { 'Access-Control-Allow-Origin': originP2 || '*' });
+          }
+          const ju = await ru.json().catch(() => null);
+          const meta = (ju && ju.user_metadata) || {};
+          return json({ ok: true, nickname: (ju && ju.nickname) || null, redes: meta.redes || {} }, 200, { 'Access-Control-Allow-Origin': originP2 || '*' });
+        }
+
+        // POST: validar y aplicar cambios
+        const cuerpo = await request.json().catch(() => ({}));
+        const cambios = {};
+        let nota = '';
+        if (cuerpo.nickname !== undefined && cuerpo.nickname !== null && String(cuerpo.nickname) !== '') {
+          const nn = String(cuerpo.nickname).trim();
+          if (!/^[a-zA-Z0-9_.\-]{3,20}$/.test(nn)) {
+            return json({ ok: false, error: 'nick_invalido', detalle: '3 a 20 caracteres: letras, números, punto, guion o _' }, 400, { 'Access-Control-Allow-Origin': originP2 || '*' });
+          }
+          cambios.nickname = nn;
+        }
+        if (cuerpo.redes && typeof cuerpo.redes === 'object') {
+          const limpio = {};
+          for (const k of ['discord', 'twitch', 'youtube', 'riot', 'faceit']) {
+            const v = cuerpo.redes[k];
+            if (!v || typeof v !== 'object') continue;
+            limpio[k] = {
+              conectada: !!v.conectada,
+              usuario: String(v.usuario || '').slice(0, 40),
+              url: String(v.url || '').slice(0, 200),
+              nivel: Number.isFinite(v.nivel) ? Math.max(0, Math.min(99, Math.floor(v.nivel))) : null,
+              pais: String(v.pais || '').toLowerCase().slice(0, 8),
+              avatar: String(v.avatar || '').slice(0, 300) || null,
+            };
+          }
+          cambios.user_metadata = { redes: limpio };
+        }
+        if (!Object.keys(cambios).length) {
+          return json({ ok: false, error: 'nada_que_guardar' }, 400, { 'Access-Control-Allow-Origin': originP2 || '*' });
+        }
+        const up2 = await fetch('https://' + AUTH0_TENANT + '/api/v2/users/' + encodeURIComponent(sesP2.sub), {
+          method: 'PATCH',
+          headers: mgmtH2,
+          body: JSON.stringify(cambios),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!up2.ok) {
+          const ej2 = await up2.json().catch(() => ({}));
+          const det2 = String((ej2.message || ej2.errorDescription || ej2.error || ('HTTP ' + up2.status))).slice(0, 180);
+          return json({ ok: false, error: up2.status === 403 ? 'sin_permiso_mgmt' : 'no_se_pudo_guardar', detalle: det2 }, 502, { 'Access-Control-Allow-Origin': originP2 || '*' });
+        }
+        const ju2 = await up2.json().catch(() => ({}));
+        return json({
+          ok: true,
+          nickname: ju2.nickname || cambios.nickname || null,
+          redes: (ju2.user_metadata && ju2.user_metadata.redes) || cambios.user_metadata.redes || {},
+          nota,
+        }, 200, { 'Access-Control-Allow-Origin': originP2 || '*' });
+      } catch (errP2) {
+        return json({ ok: false, error: 'auth0_inalcanzable' }, 502, { 'Access-Control-Allow-Origin': originP2 || '*' });
+      }
+    }
+
     // --- 7b3) CLIPS DESTACADOS: vitrina pública de los clips de los jugadores.
     // GET (público): manifest con los clips publicados. POST (con sesión JWT):
     // multipart {video, thumb, titulo, juego, nick, username, dur, ext} → crea
@@ -1937,6 +2465,16 @@ async function fetchWorker(request, env, ctx) {
           const gOK = await guardarManifest(ghTok, sha, clips);
           if (!gOK) featCache = { at: 0, body: null }; // fuerza relectura en la próxima visita
           featCache = { at: 0, body: null };
+          // VANTS-BUS: el clip ya está publicado en vants-clips; flask-agents
+          // puede anunciarlo y VANTS HUB mostrar la notificación.
+          publicarBus(env, ctx, EVENTS.CLIP_PUBLISHED, {
+            clipId: tag,
+            titulo,
+            juego: juego.toLowerCase(),
+            nick,
+            video: entrada.video,
+            thumb: entrada.thumb,
+          });
           const resP = json({ ok: true, id: tag, video: entrada.video, thumb: entrada.thumb, manifest: gOK });
           resP.headers.set('Access-Control-Allow-Origin', origin);
           return resP;
