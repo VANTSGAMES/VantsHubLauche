@@ -62,7 +62,7 @@ sin la evidencia correspondiente.
 ## H. Pruebas y despliegue (F13-F14)
 
 - [ ] AC36 `npm test` ejecuta la suite plataforma y pasa (unit siempre; integración con Neon si hay DATABASE_URL).
-- [ ] AC37 Suites existentes siguen verdes (regresión: test_agente, test_llm_agente, test_mm_fase4, test_vantsbot…).
+- [ ] AC37 Suites existentes siguen verdes (regresión: test_plataforma, test_mm_fase4, test_vantsbot…; las suites del agente corren en el cuartel `VANTSNET/flask-Agents`).
 - [ ] AC38 Push a main → CI SUCCESS → smoke en producción con navegador: rutas críticas 200, 0 errores de consola, capturas guardadas.
 - [ ] AC39 Espejo ×3 verificado (hashes iguales en raíz/public/vants-server/public para archivos nuevos).
 

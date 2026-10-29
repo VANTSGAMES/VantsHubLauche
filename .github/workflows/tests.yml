@@ -79,33 +79,6 @@ jobs:
       - name: "mm (matchmaking serverless: JWT RS256, cola, RR, invites)"
         run: node scripts/test_mm_neon.js
 
-  agente:
-    name: Agente VANTS (61 + 60 + 28 asserts)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 20
-
-      - name: Dependencias del agente
-        working-directory: services/agent-service
-        run: npm ci --no-audit --no-fund
-
-      - name: Núcleo, reglas y memoria
-        working-directory: services/agent-service
-        run: node ../../scripts/test_agente.js
-
-      - name: Sandbox (memoria autoalojada + exec aislado)
-        working-directory: services/agent-service
-        run: node ../../scripts/test_sandbox_agente.js
-
-      - name: Cerebro agéntico GLM (function calling, servidores falsos)
-        working-directory: services/agent-service
-        run: node ../../scripts/test_llm_agente.js
-
   plataforma:
     name: Plataforma de torneos (90 asserts unit + integración)
     runs-on: ubuntu-latest

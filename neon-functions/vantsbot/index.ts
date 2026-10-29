@@ -176,7 +176,7 @@ function embedEstado(run: Fila | null, incidentes: Fila[]): Embed {
     title: 'Agente VANTS · estado',
     description: run
       ? `Estado global: **${estado}**`
-      : 'El agente aún no ha corrido (espera al ciclo de CI o lanza `agente.yml`).',
+      : 'El agente aún no ha corrido (espera al ciclo del cuartel flask-Agents).',
     color: COLORES_ESTADO[estado] ?? 0x5865f2,
   };
   if (run) {
@@ -231,7 +231,7 @@ async function procesarAgente(body: Fila, dep: Dependencias): Promise<Salida> {
     const incidentes = (await dep.pool.query(sqlInc, paramsInc)).rows;
     if (sub === 'estado') return { embeds: [embedEstado(run, incidentes)] };
     // informe: diagnóstico completo en texto (como el /informe del bot python)
-    if (!run) return { content: 'El agente aún no ha corrido. Lanza el workflow `agente.yml` o espera el ciclo.' };
+    if (!run) return { content: 'El agente aún no ha corrido. El ciclo corre desde el cuartel flask-Agents.' };
     const lineas = [`Estado global: ${run.estado_global}`];
     if (run.resumen) lineas.push(String(run.resumen));
     for (const i of incidentes) lineas.push(`#${i.id} [${i.severity}] ${txt(i.titulo, 80)}`);

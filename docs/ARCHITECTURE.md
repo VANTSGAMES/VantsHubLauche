@@ -142,7 +142,7 @@ temporada y fecha (auditable y corregible).
 | 3 — Backend y datos | Auth/permisos, esquemas Neon, rankings, torneos | ✅ base sólida |
 | 4 — Competición real | Matchmaking, resultados verificables, historial RR, dedupe | ✅ migraciones 21–23 (cola + emparejamiento atómico + reporte → RR automático + historial; service v0.5.0 con 51 tests; HUB con BUSCAR PARTIDA) |
 | 5 — Launcher | VANTS HUB Windows: presencia, matchmaking, invitaciones, apertura de juegos | ✅ 2.4.0 — HUB se ACTUALIZA SOLO (electron-updater + Releases con latest.yml; descarga silenciosa, instala al cerrar o reiniciar) + invitaciones HUB (migración 24: invitar por email, aceptar → en cola, el emparejador cruza) |
-| 6 — Operación profesional | Monitorización, auditoría, pruebas automáticas, despliegues controlados | 🟡 en curso — **AGENTE VANTS** vivo (`services/agent-service` + workflow `agente.yml` cada 30 min: vigila web/launcher/BD/CI, actúa con guardas anti-bucle, memoria en Neon migración 25, canal Discord vía bot `/agente` + DMs; docs/AGENTE.md) + CI de pruebas (tests.yml) + concurrency en despliegues |
+| 6 — Operación profesional | Monitorización, auditoría, pruebas automáticas, despliegues controlados | 🟡 en curso — **AGENTE VANTS** vivo, código y workflow en el **cuartel** `VANTSNET/flask-Agents` (ciclo cada 30 min: vigila web/launcher/BD/CI, actúa con guardas anti-bucle, memoria en Neon migración 25; este repo es cliente por `bot/` y `vantsbot`, doc `docs/AGENTE.md`) + CI de pruebas (tests.yml) + concurrency en despliegues |
 
 Tras cada fase: verificar que Auth0, torneos, ranking y los scripts conectados
 a Neon siguen funcionando **antes** de tocar la arquitectura del backend.
