@@ -5,9 +5,6 @@
 | Suite | Comando | Cobertura | Estado esperado |
 |---|---|---|---|
 | Plataforma de torneos | `node scripts/test_plataforma.js` | Lógica pura compartida con el Worker: validación de query, clasificación de estados, orden, paginación, fechas es/en, render XSS-safe + **integración real** con el proxy (si hay red; si no, `~skip` honesto) | **90** ✓ · 0 ✗ |
-| Agente VANTS | `node scripts/test_agente.js` | Núcleo, reglas, memoria, chequeos | 61 ✓ |
-| Cerebro agéntico GLM | `node scripts/test_llm_agente.js` | Function calling, bucle tools, anti-bucle | 30 ✓ |
-| Sandbox del agente | `node scripts/test_sandbox_agente.js` | Memoria autoalojada + exec aislado | 60 ✓ |
 | Matchmaking (fase 4) | `node scripts/test_mm_fase4.js` | Cola, emparejamiento, RR | 54 ✓ |
 | Matchmaking Neon | `node scripts/test_mm_neon.js` | Funciones serverless | 16 ✓ |
 | Vantsbot Discord | `node scripts/test_vantsbot.js` | Interactions, puente | 36 ✓ |
@@ -16,13 +13,14 @@
 | Docker | `docker compose build` | api-gateway (Express :8080) y matchmaking (Fastify :8081): multi-stage `node:24-alpine`, `USER node` | build OK · healthcheck `/healthz` en ambos |
 | MCP | `node mcp/server.mjs` (smoke JSON-RPC en `fullstack.yml`) | `initialize` + `tools/list` | 4 tools de solo lectura (estado_db, torneos, jugadores, partidos) |
 
-Total de asserts: **347** verdes en las 7 suites Node/Bun.
+Total de asserts: **196** verdes en las 4 suites Node/Bun. Los **173** asserts del agente (83 + 60 + 30) corren en el cuartel `VANTSNET/flask-Agents`.
 
 ## CI (GitHub Actions — `tests.yml`)
 
 Cada push a `main` que toque `services/**`, `scripts/**`, `vants-server/**`,
-`neon-functions/**` o `db/**` ejecuta 5 jobs: matchmaking, neon_functions, agente,
-**plataforma** y **e2e**. Rojo = no confiar en el despliegue.
+`neon-functions/**` o `db/**` ejecuta 4 jobs: matchmaking, neon_functions,
+**plataforma** y **e2e** (los tests del agente corren en el cuartel
+`VANTSNET/flask-Agents`). Rojo = no confiar en el despliegue.
 
 ## Pruebas E2E manuales (navegador)
 

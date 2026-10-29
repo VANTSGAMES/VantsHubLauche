@@ -662,13 +662,14 @@ async function hmacSha1Hex(clave, mensaje) {
 }
 
 /* Webhook de Vercel → repository_dispatch(vercel_deploy) en GitHub, para que
-   el Agente VANTS (agente.yml) reaccione al momento a un deploy fallido sin
-   esperar al cron de 30 min. Solo deployment.error / deployment.canceled del
-   proyecto vants; el resto se ignora con 200. Seguridad: firma
-   x-vercel-signature (HMAC-SHA1 del cuerpo con VERCEL_WEBHOOK_SECRET, tiempo
-   constante), cuerpo ≤ 64 KB, rate limit, y el PAT (GH_DISPATCH_TOKEN, alcance
-   mínimo: contents:write solo en este repo) nunca sale en la respuesta. Sin
-   los dos secretos configurados responde 503 y no hace nada. */
+   el Agente VANTS del cuartel (VANTSNET/flask-Agents, workflow agente.yml)
+   reaccione al momento a un deploy fallido sin esperar al cron de 30 min.
+   Solo deployment.error / deployment.canceled del proyecto vants; el resto se
+   ignora con 200. Seguridad: firma x-vercel-signature (HMAC-SHA1 del cuerpo
+   con VERCEL_WEBHOOK_SECRET, tiempo constante), cuerpo ≤ 64 KB, rate limit, y
+   el PAT (GH_DISPATCH_TOKEN, alcance mínimo: contents:write en el repo del
+   cuartel) nunca sale en la respuesta. Sin los dos secretos configurados
+   responde 503 y no hace nada. */
 const VERCEL_PROJECT_ID = 'prj_vxL6Wd8RgsiMF6Eg8AnMGiTriITn';
 async function handleVercelWebhook(request, env) {
   const secreto = String((env && env.VERCEL_WEBHOOK_SECRET) || '');
@@ -699,7 +700,7 @@ async function handleVercelWebhook(request, env) {
     proyecto: proyecto.slice(0, 64),
     creado: ev.createdAt || null,
   };
-  const repo = String((env && env.GH_DISPATCH_REPO) || 'feispla/Vants');
+  const repo = String((env && env.GH_DISPATCH_REPO) || 'VANTSNET/flask-Agents');
   const r = await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
     method: 'POST',
     headers: { accept: 'application/vnd.github+json', authorization: 'Bearer ' + ghToken, 'content-type': 'application/json', 'user-agent': 'vants-worker' },
