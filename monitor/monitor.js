@@ -25,13 +25,18 @@ if (process.env.VANTS_DISCORD_WEBHOOK) cfg.webhookUrl = process.env.VANTS_DISCOR
 const REPORT = process.argv.includes('--report');
 const COLORS = { up: 0x3ddc84, degraded: 0xffb547, down: 0xff4655, info: 0x5865f2 };
 
+// Corregido 2026-10-29 (issue #121): fuera las rutas de la era GitHub Pages
+// (assets/css/arena.css, assets/js/arena.js, arena-live.js, auth0-config.js —
+// nunca existieron en el Worker -> 404 falsos y DOWN permanente). Dentro:
+// paginas reales del Worker + salud del bot Discord y del VANTS-BUS.
 const CRIT = [
-  { id: 'web', label: 'Web (Cloudflare Worker)', url: cfg.site, markers: ['VANTS GAMES', 'arena-live.js'] },
+  { id: 'web', label: 'Web (Cloudflare Worker)', url: cfg.site, markers: ['VANTS GAMES'] },
   { id: 'health', label: 'API health', url: cfg.site + 'api/health', markers: ['"ok":true'] },
-  { id: 'css', label: 'arena.css', url: cfg.site + 'assets/css/arena.css' },
-  { id: 'arena', label: 'arena.js', url: cfg.site + 'assets/js/arena.js' },
-  { id: 'live', label: 'arena-live.js', url: cfg.site + 'assets/js/arena-live.js' },
-  { id: 'cfg', label: 'auth0-config.js', url: cfg.site + 'assets/js/auth0-config.js' },
+  { id: 'ranking', label: 'Ranking', url: cfg.site + 'ranking.html' },
+  { id: 'perfil', label: 'Perfil', url: cfg.site + 'perfil.html' },
+  { id: 'clips', label: 'Clips', url: cfg.site + 'clips.html' },
+  { id: 'bot', label: 'Bot Discord (salud)', url: 'https://vantsbot.vants.workers.dev/salud', markers: ['"ok":true'] },
+  { id: 'bus', label: 'VANTS-BUS (salud)', url: 'https://vants-bus.vants.workers.dev/health', markers: ['"ok":true'] },
   { id: 'proxy', label: 'Neon vantsdata (API)', url: cfg.proxy, markers: ['"ok":true'] },
 ];
 const EXTERN = [
